@@ -43,7 +43,16 @@ rebuilding this from scratch under deadline pressure.
 - **Non-blocking backpressure** — a slow/dead client gets dropped
   rather than stalling delivery for everyone else on a channel
 - **Observability** — structured JSON logs, `/healthz` + `/readyz`, a
-  dependency-free `/metrics` endpoint in Prometheus text format
+  dependency-free `/metrics` endpoint in Prometheus text format backed
+  by the hub's own delivery/drop/connection counters
+- **Test suite** — unit tests for hub delivery semantics, client
+  backpressure and heartbeat liveness, JWT verification, channel
+  authorization, the in-memory pubsub driver, and config validation;
+  runs in CI against a real Redis on every push
+- **Load test tool** (`cmd/loadtest`) — measures real connection setup
+  time and p50/p90/p99 delivery latency instead of asserting numbers
+- **Browser demo client** (`demo/index.html`) — zero-build way to
+  visually prove fan-out works, good for a portfolio screen recording
 
 ## Stack
 
@@ -63,6 +72,54 @@ go run ./cmd/api
 ```
 
 Requires a local Redis (`redis-server` or `docker run -p 6379:6379 redis:7-alpine`).
+For zero-dependency local hacking, set `PUBSUB_DRIVER=memory` — no Redis
+needed, but this is single-instance only and has no reconnect replay
+(disallowed in production; see `internal/config`).
+
+## Trying it out
+
+```bash
+# 1. mint a test token (no auth service required for local testing)
+go run ./cmd/mint-token -user=u1 -org=o1
+
+# 2. run the API (in another terminal)
+go run ./cmd/api
+
+# 3. open the browser demo
+open demo/index.html   # or just open the file directly in a browser
+```
+
+Paste the token in, connect, subscribe to `broadcast:demo`, then hit
+"Publish event" — the message round-trips through the server and back
+to the same tab. Open the file in a second tab to see true fan-out
+between two independent connections.
+
+## Tests
+
+```bash
+make test          # go test ./... -race
+make test-cover    # with a coverage report
+```
+
+Covers: hub registration/subscribe/unsubscribe/delivery semantics and
+concurrency safety, client backpressure (a full outbox drops rather
+than blocks) and heartbeat liveness, JWT verification (valid/expired/
+wrong-secret/missing-claim), channel authorization per namespace, the
+in-memory PubSub driver, and config validation (production guardrails
+for secrets, origins, and the pubsub driver). Runs in CI on every push
+(`.github/workflows/ci.yml`), against a real Redis service container.
+
+## Load testing
+
+```bash
+make loadtest CONNS=1000 MESSAGES=50 TOKEN=$(go run ./cmd/mint-token)
+```
+
+`cmd/loadtest` opens N concurrent WebSocket connections, subscribes
+them all to one channel, publishes M events through the public API,
+and reports connection setup time plus p50/p90/p99 delivery latency.
+Copy the output into `docs/load-test-results.md` — real measured
+numbers, not asserted ones, are what make this credible to a client.
 
 ## Proving cross-instance fan-out (the actual point of this repo)
 
@@ -79,17 +136,21 @@ both receive it regardless of which instance they're connected to.
 
 ```
 cmd/api/               entrypoint — wires config, Redis, hub, routes, graceful shutdown
+cmd/loadtest/            connection + delivery-latency load test tool
+cmd/mint-token/          local JWT minting for testing, without a real auth service
+demo/                   zero-build browser client for manually proving fan-out
 internal/
-  auth/                 JWT verification (issuance lives in your auth service)
-  hub/                   per-instance connection registry + client lifecycle
-  pubsub/                 Redis Pub/Sub + replay buffer, behind a swappable interface
-  channel/               subscribe-time authorization (user/org/broadcast namespaces)
-  transport/              WebSocket handler, SSE handler, publish endpoint
-  middleware/              auth + publish-key guards
-  metrics/                Prometheus-format /metrics
-  config/                env-driven configuration with production guardrails
-docs/                   architecture notes, OpenAPI spec, load test template
-docker-compose.yml       2 API instances + Redis + nginx, for the fan-out demo
+  auth/                  JWT verification (issuance lives in your auth service; IssueDevToken is test-only)
+  hub/                    per-instance connection registry + client lifecycle (unit tested)
+  pubsub/                 Redis Pub/Sub + in-memory driver + replay buffer, behind a shared interface
+  channel/                subscribe-time authorization (user/org/broadcast namespaces)
+  transport/               WebSocket handler, SSE handler, publish endpoint
+  middleware/               auth + publish-key guards
+  metrics/                 Prometheus-format /metrics, backed by the hub's own delivery counters
+  config/                 env-driven configuration with production guardrails
+docs/                    architecture notes, OpenAPI spec, load test results template
+.github/workflows/ci.yml  build, vet, race-tested unit tests, Docker build
+docker-compose.yml        2 API instances + Redis + nginx, for the fan-out demo
 ```
 
 ## Deploying
