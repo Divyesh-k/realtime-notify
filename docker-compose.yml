@@ -1,0 +1,48 @@
+# Two API instances behind nginx is the actual point of this repo: it
+# proves messages fan out correctly across processes via Redis Pub/Sub,
+# not just within one server's memory. Connect a client to instance A,
+# publish an event, and watch it arrive whether the client landed on A
+# or B via the load balancer.
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 5
+
+  api-a:
+    build: .
+    environment:
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-dev-only-secret-do-not-use-in-production}
+      - PUBLISH_API_KEY=${PUBLISH_API_KEY:-dev-only-publish-key}
+      - PUBSUB_DRIVER=redis
+      - ALLOWED_ORIGINS=*
+      - APP_ENV=development
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  api-b:
+    build: .
+    environment:
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-dev-only-secret-do-not-use-in-production}
+      - PUBLISH_API_KEY=${PUBLISH_API_KEY:-dev-only-publish-key}
+      - PUBSUB_DRIVER=redis
+      - ALLOWED_ORIGINS=*
+      - APP_ENV=development
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on: [api-a, api-b]
