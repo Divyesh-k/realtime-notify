@@ -1,0 +1,77 @@
+openapi: 3.0.3
+info:
+  title: Realtime Notify API
+  version: 0.1.0
+  description: >
+    WebSocket/SSE fan-out service. See docs/architecture.md for how
+    cross-instance delivery works.
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      responses:
+        "200": { description: OK }
+  /readyz:
+    get:
+      summary: Readiness check (verifies Redis connectivity)
+      responses:
+        "200": { description: Ready }
+        "503": { description: Redis unavailable }
+  /metrics:
+    get:
+      summary: Prometheus-format metrics
+      responses:
+        "200": { description: Metrics text }
+  /ws:
+    get:
+      summary: WebSocket upgrade endpoint
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+          description: JWT access token
+      responses:
+        "101": { description: Switching protocols }
+        "401": { description: Invalid or missing token }
+  /sse:
+    get:
+      summary: Server-Sent Events fallback (single channel per connection)
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+        - name: channel
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: text/event-stream }
+        "401": { description: Unauthorized }
+        "403": { description: Not authorized for this channel }
+  /api/v1/publish:
+    post:
+      summary: Server-to-server event publish
+      security:
+        - publishKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel]
+              properties:
+                channel: { type: string, example: "org:123" }
+                payload: { type: object }
+      responses:
+        "202": { description: Published }
+        "400": { description: Invalid request }
+        "401": { description: Invalid publish key }
+components:
+  securitySchemes:
+    publishKey:
+      type: apiKey
+      in: header
+      name: X-Publish-Key
