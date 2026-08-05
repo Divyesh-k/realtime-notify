@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Realtime Notify — Demo Client</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:24px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.sub { color:#8a8f98; margin:0 0 20px; font-size:13px; }
+  .grid { display:grid; grid-template-columns: 340px 1fr; gap:20px; }
+  fieldset { border:1px solid #2a2e37; border-radius:8px; padding:14px; }
+  legend { padding:0 6px; color:#8a8f98; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  label { display:block; font-size:12px; color:#9aa0ab; margin:10px 0 4px; }
+  input, select { width:100%; box-sizing:border-box; background:#171a21; border:1px solid #2a2e37; border-radius:6px; color:#e6e6e6; padding:8px; font-size:13px; }
+  button { margin-top:14px; width:100%; padding:10px; border:none; border-radius:6px; background:#3b82f6; color:white; font-weight:600; cursor:pointer; font-size:13px; }
+  button.secondary { background:#2a2e37; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:12px; margin-top:10px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#555; }
+  .dot.connected { background:#22c55e; }
+  .dot.error { background:#ef4444; }
+  .log { background:#0b0d11; border:1px solid #2a2e37; border-radius:8px; padding:12px; height:520px; overflow-y:auto; font-family:ui-monospace, monospace; font-size:12px; }
+  .log .line { padding:4px 0; border-bottom:1px solid #1c1f26; }
+  .log .type-event { color:#4ade80; }
+  .log .type-ack { color:#60a5fa; }
+  .log .type-error { color:#f87171; }
+  .log .type-system { color:#8a8f98; }
+  .ts { color:#565b66; margin-right:8px; }
+</style>
+</head>
+<body>
+  <h1>Realtime Notify — Demo Client</h1>
+  <p class="sub">Open this in two tabs (or two browsers) to prove cross-instance fan-out: connect both, subscribe to the same channel, publish once from either tab.</p>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Connection</legend>
+      <label>WebSocket URL</label>
+      <input id="wsUrl" value="ws://localhost:8080/ws">
+      <label>JWT token</label>
+      <input id="token" placeholder="paste a token from cmd/mint-token">
+      <button id="connectBtn">Connect</button>
+      <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">disconnected</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Subscribe</legend>
+      <label>Channel</label>
+      <input id="channel" value="broadcast:demo">
+      <button id="subscribeBtn" class="secondary" disabled>Subscribe</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Publish (server-to-server API)</legend>
+      <label>Publish URL</label>
+      <input id="publishUrl" value="http://localhost:8080/api/v1/publish">
+      <label>X-Publish-Key</label>
+      <input id="publishKey" value="dev-only-publish-key">
+      <label>Message text</label>
+      <input id="publishText" value="hello from the demo client">
+      <button id="publishBtn" class="secondary">Publish event</button>
+    </fieldset>
+  </div>
+
+  <div style="margin-top:20px;">
+    <div class="log" id="log"></div>
+  </div>
+
+<script>
+let ws = null;
+
+const $ = id => document.getElementById(id);
+const log = (type, text) => {
+  const el = document.createElement('div');
+  el.className = 'line type-' + type;
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = `<span class="ts">${ts}</span>${text}`;
+  $('log').prepend(el);
+};
+
+function setStatus(state, text) {
+  $('statusDot').className = 'dot ' + state;
+  $('statusText').textContent = text;
+}
+
+$('connectBtn').addEventListener('click', () => {
+  const url = $('wsUrl').value + '?token=' + encodeURIComponent($('token').value);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('connected', 'connected');
+    log('system', 'WebSocket connected');
+    $('subscribeBtn').disabled = false;
+  };
+  ws.onclose = () => {
+    setStatus('', 'disconnected');
+    log('system', 'WebSocket closed');
+    $('subscribeBtn').disabled = true;
+  };
+  ws.onerror = () => {
+    setStatus('error', 'error');
+    log('error', 'WebSocket error -- check console/token/URL');
+  };
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { log('system', 'unparseable frame: ' + evt.data); return; }
+    if (msg.type === 'ping') { ws.send(JSON.stringify({type:'pong'})); return; }
+    const type = msg.type || 'system';
+    log(type, `<b>${type}</b> on <code>${msg.channel || ''}</code> — ${JSON.stringify(msg.payload ?? '')}`);
+  };
+});
+
+$('subscribeBtn').addEventListener('click', () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const channel = $('channel').value;
+  ws.send(JSON.stringify({ type: 'subscribe', channel }));
+  log('system', 'sent subscribe for ' + channel);
+});
+
+$('publishBtn').addEventListener('click', async () => {
+  const body = {
+    channel: $('channel').value,
+    payload: { text: $('publishText').value, sent_at: new Date().toISOString() }
+  };
+  try {
+    const res = await fetch($('publishUrl').value, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Publish-Key': $('publishKey').value },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('status ' + res.status);
+    log('system', 'published OK: ' + JSON.stringify(body.payload));
+  } catch (e) {
+    log('error', 'publish failed: ' + e.message);
+  }
+});
+</script>
+</body>
+</html>
