@@ -22,6 +22,7 @@ func TestVerifyValidToken(t *testing.T) {
 	claims := Claims{
 		UserID: "u1",
 		OrgID:  "o1",
+
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
