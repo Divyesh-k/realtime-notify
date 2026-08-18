@@ -41,6 +41,7 @@ func TestVerifyValidToken(t *testing.T) {
 func TestVerifyExpiredToken(t *testing.T) {
 	v := NewVerifier("test-secret")
 	claims := Claims{
+
 		UserID: "u1",
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
