@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"google.golang.org/grpc/credentials/jwt"
 )
 
 var (
